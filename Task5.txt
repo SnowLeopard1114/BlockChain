@@ -1,0 +1,243 @@
+pragma solidity ^0.5.17;
+//simpleToken Contract
+contract SimpleToken {
+    mapping(address => uint256) public accounts;
+    
+    function addMoney(uint256 intialAmount, address payable user)  public{
+        accounts[user] += intialAmount;
+    }
+    function getBalance(address acc)  public returns(uint256){
+        return accounts[acc];
+    }
+    function transfer(address payable sender, address payable recipient, uint256 amount) public{
+       require(accounts[sender] >= amount, "ERROR!!!: Please make sure you have enough money to transfer!!!" );
+       accounts[sender] = accounts[sender] - amount;
+       accounts[recipient] = accounts[recipient] + amount;
+    }
+}
+contract Escrow {
+    SimpleToken public simpleToken;
+    uint256 balance;
+    address payable public buyer;
+    address payable public seller;
+    address payable public escrow;
+    address payable public mediator;
+    uint256 public product_price;
+    bool public buyer_Agree;
+    bool public seller_Agree;
+    bool public dispute;
+    uint256 public lockedTime;
+    function setUpEscrow(address payable input_buyer, address payable input_seller, address payable input_escrow, address payable input_mediator, uint256 price, SimpleToken input_simpleToken) public {
+        buyer = input_buyer;
+        seller = input_seller;
+        escrow = input_escrow;
+        dispute = false;
+        mediator = input_mediator;
+        product_price = price;
+        simpleToken = input_simpleToken;
+    }
+    function getBuyerAgree() public returns(bool){
+        return buyer_Agree;
+    }
+    function getSellerrAgree() public returns(bool){
+        return seller_Agree;
+    }
+    function addMoney(address payable currentUser, uint256 amountValue)public payable{
+        require(currentUser == buyer, "Error!!! Only buyer can add money!!!");
+        if(currentUser == buyer){
+            require(amountValue / (10 ** 18) > product_price * 101 / 100, "ERROR!!!!!");
+            simpleToken.addMoney(amountValue / (10**18), currentUser);
+        }
+    }
+    function getBalance(address payable user) public returns(uint256){
+        uint256 val = simpleToken.getBalance(user);
+        return val;
+    }
+    function ApproveTxSuccess(address payable user) public payable  {
+        if (user == buyer){
+            buyer_Agree = true;
+        } else if (user == seller){
+            seller_Agree = true;
+        }
+    }
+    
+    function MakeDeposit(address payable user) public payable {
+    }
+    function ApproveTxFail(address payable user) public {
+        if (user == buyer){
+            buyer_Agree = false;
+        } else if (user == seller){
+            seller_Agree = false;
+        }
+        if((!buyer_Agree && seller_Agree) || (buyer_Agree && !seller_Agree)){
+            TimeLocked();
+        }
+    }
+    function getLockedTime() public returns(uint256){
+        return lockedTime;
+    }
+    
+    function getDispute() public returns(bool){
+        return dispute;
+    }
+    function Arbitrate(uint256 decision, address payable user) public{
+        //If the timeout is reached, simply refund the buyer
+        if(now - lockedTime >= 120){
+            simpleToken.transfer(escrow, buyer, product_price);
+            balance = balance - product_price;
+            buyer.transfer(address(this).balance / 101 * 100);
+        }
+        //Only the mediator can decide the state of the transaction
+        if (user == mediator){
+            if(dispute == true){
+                if(decision == 1){  //make the transaction success
+                    dispute = false;
+                    simpleToken.transfer(escrow, seller, product_price);
+                    balance = balance - product_price;
+                    seller.transfer(address(this).balance / 101 * 100);
+                }
+                else if(decision == 2){//make the transaction failed
+                    dispute = false;
+                    simpleToken.transfer(escrow, buyer, product_price);
+                    balance = balance - product_price;
+                    buyer.transfer(address(this).balance / 101 * 100);
+                }
+            }
+        }
+    }
+    function TimeLocked() private{
+        dispute = true;
+        lockedTime = now;
+    }
+    
+    function disDispute() public{
+        dispute = false;
+    }
+}
+
+contract AccountManagement{
+    struct Buyer{
+        address payable buyerid;
+    }
+    struct Seller{
+        address  payable sellerid;
+    }
+    struct Product{
+        address  payable productid;
+        uint256  price;
+    }
+    mapping(address => Buyer)  public buyerAccounts;
+    mapping(address => Seller)  public sellerAccounts;
+    mapping(address => Product)  public productList;
+    
+    Escrow public escrowContract;
+    SimpleToken public simpleTokenRef;
+    address payable public cur_buyer;
+    address payable public cur_seller;
+    address payable public cur_escrow;
+    address payable public cur_mediator;
+    uint256 public cur_price;
+    
+    constructor()public{
+        escrowContract = new Escrow();
+        simpleTokenRef = new SimpleToken();
+    }
+    
+    function setUpEscrow(address payable input_buyer, address payable input_seller, address payable input_escrow, address payable input_mediator,address payable ProductAddr, SimpleToken input_simpleToken) public {
+        escrowContract.setUpEscrow(input_buyer,input_seller,input_escrow,input_mediator, productList[ProductAddr].price, input_simpleToken);
+        cur_seller = input_seller;
+        cur_buyer = input_buyer;
+        cur_price = productList[ProductAddr].price;
+        cur_escrow = input_escrow;
+        cur_mediator = input_mediator;
+    }
+    
+    
+    function addMoney()public payable{
+        escrowContract.addMoney(msg.sender, msg.value);
+    }
+    function getBalance(address payable user) public returns(uint256){
+       return escrowContract.getBalance(user);
+    }
+    function ApproveTxSuccess() public payable  {
+       escrowContract.ApproveTxSuccess(msg.sender);
+       
+       bool buy = escrowContract.getBuyerAgree();
+       bool sell = escrowContract.getSellerrAgree();
+       if(buy && sell){
+            simpleTokenRef.transfer(cur_escrow, cur_seller, cur_price);
+            cur_seller.transfer(cur_price * 10 ** 18);
+       }
+    }
+    
+    function MakeDeposit() public payable {
+      escrowContract.MakeDeposit(msg.sender);
+      if (msg.sender == cur_buyer) {
+            uint256 payment;
+            payment = cur_price * 101 / 100;
+            simpleTokenRef.transfer(cur_buyer, cur_escrow, uint256(payment));
+        }
+    }
+    function ApproveTxFail() public {
+       escrowContract.ApproveTxFail(msg.sender);
+       bool buy = escrowContract.getBuyerAgree();
+       bool sell = escrowContract.getSellerrAgree();
+       if(!buy && !sell){
+            simpleTokenRef.transfer(cur_escrow, cur_buyer, cur_price);
+            cur_buyer.transfer(cur_price * 10 ** 18);
+        }
+    }
+    
+    function Arbitrate(uint256 decision) public{
+        escrowContract.Arbitrate(decision, msg.sender);
+        uint256 lockedTime = escrowContract.getLockedTime();
+        if(now - lockedTime >= 120){
+            simpleTokenRef.transfer(cur_escrow, cur_buyer, cur_price);
+            cur_buyer.transfer(cur_price * 10 ** 18);
+        }
+        //Only the mediator can decide the state of the transaction
+        bool dispute = escrowContract.getDispute();
+        if (msg.sender == cur_mediator){
+            if(dispute == true){
+                if(decision == 1){  //make the transaction success
+                    escrowContract.disDispute();
+                    simpleTokenRef.transfer(cur_escrow, cur_seller, cur_price);
+                    cur_seller.transfer(cur_price * 10 ** 18);
+                }
+                else if(decision == 2){//make the transaction failed
+                    escrowContract.disDispute();
+                    simpleTokenRef.transfer(cur_escrow, cur_buyer, cur_price);
+                    cur_buyer.transfer(cur_price * 10 ** 18);
+                }
+            }
+        }
+    }
+    
+    function addBuyer(address payable newBuyer) public {
+        buyerAccounts[newBuyer].buyerid = newBuyer;
+    }
+    
+    function addSeller(address payable newSeller) public{
+        sellerAccounts[newSeller].sellerid = newSeller;
+    }
+    
+    function addProduct(address payable newProduct, uint256 newPrice)public{
+        productList[newProduct].productid = newProduct;
+        productList[newProduct].price = newPrice;
+    }
+    function getProduct(address payable newProduct)public returns(uint256){
+        return productList[newProduct].price;
+    }
+    function deleteBuyer(address cur) public{
+        delete buyerAccounts[cur];
+    }
+    
+    function deleteSeller(address sel) public{
+        delete sellerAccounts[sel];
+    }
+    
+    function deleteProduct(address pri) public{
+        delete productList[pri];
+    }
+    
+}

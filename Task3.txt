@@ -1,0 +1,110 @@
+pragma solidity ^0.5.17;
+//simpleToken Contract
+contract SimpleToken {
+    mapping(address => uint256) public accounts;
+    
+    function addMoney(uint256 intialAmount, address user)  public{
+        accounts[user] += intialAmount;
+    }
+    function getBalance(address acc)  public returns(uint256){
+        return accounts[acc];
+    }
+    function transfer(address sender, address recipient, uint256 amount) public returns(bool){
+       require(accounts[sender] >= amount, "ERROR!!!: Please make sure you have enough money to transfer!!!" );
+       accounts[sender] = accounts[sender] - amount;
+       accounts[recipient] = accounts[recipient] + amount;
+       return true;
+    }
+}
+contract Escrow {
+    SimpleToken public simpleToken;
+    uint256 balance;
+    address public buyer;
+    address public seller;
+    address public escrow;
+    address public mediator;
+    uint256 product_price;
+    bool buyer_Agree;
+    bool seller_Agree;
+    bool dispute;
+    uint256 lockedTime;
+    constructor(address input_buyer, address input_seller, address input_escrow, address input_mediator, uint256 price) public {
+        buyer = input_buyer;
+        seller = input_seller;
+        escrow = input_escrow;
+        dispute = false;
+        mediator = input_mediator;
+        product_price = price;
+        simpleToken = new SimpleToken();
+    }
+    function addMoney(uint256 intialAmount, address userTmp)public{
+        simpleToken.addMoney(intialAmount, userTmp);
+    }
+    function getBalance(address user) public returns(uint256){
+        uint256 val = simpleToken.getBalance(user);
+        return val;
+    }
+    function ApproveTxSuccess() public payable  {
+        if (msg.sender == buyer){
+            buyer_Agree = true;
+        } else if (msg.sender == seller){
+            seller_Agree = true;
+        }
+        if (buyer_Agree && seller_Agree){
+            if(simpleToken.transfer(escrow, seller, balance / 101 * 100))
+                balance = 0;
+        }
+    }
+    
+    function MakeDeposit() public payable {
+        if (msg.sender == buyer) {
+            uint256 payment;
+            payment = product_price * 101 / 100;
+            balance += payment;
+            simpleToken.transfer(buyer, escrow, uint256(payment));
+        }
+    }
+    function ApproveTxFail() public {
+        if (msg.sender == buyer){
+            buyer_Agree = false;
+        } else if (msg.sender == seller){
+            seller_Agree = false;
+        }
+        if(!buyer_Agree && !seller_Agree){
+           if(simpleToken.transfer(escrow, buyer, balance / 101 * 100))
+                balance = 0;
+        }
+        if((!buyer_Agree && seller_Agree) || (buyer_Agree && !seller_Agree)){
+            TimeLocked();
+        }
+    }
+    
+    function Arbitrate(uint256 decision) public{
+        //If the timeout is reached, simply refund the buyer
+        if(now - lockedTime >= 120){
+            if(simpleToken.transfer(escrow, buyer, balance))
+                    balance = 0;
+        }
+        //Only the mediator can decide the state of the transaction
+        if (msg.sender == mediator){
+            if(dispute == true){
+                if(decision == 1){  //make the transaction success
+                    dispute = false;
+                    if(simpleToken.transfer(escrow, seller, balance / 101 * 100))
+                        balance = 0;
+                }
+                else if(decision == 2){//make the transaction failed
+                    dispute = false;
+                    if(simpleToken.transfer(escrow, buyer, balance / 101 * 100))
+                    balance = 0;
+                }
+            }
+        }
+    }
+    
+    function TimeLocked() private{
+        dispute = true;
+        lockedTime = now;
+    }
+
+}
